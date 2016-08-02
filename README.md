@@ -4,6 +4,11 @@ Flapjack Grafana Receiver
 Flapjack-grafana-receiver is a tool to generate monitoring events based on Grafana board definitions
 and feed the events to flapjack for alerting. It is lightweight, easy to setup and customizable.
 
+Flapjack is a monitoring notification and event processing system. 
+
+This is project is currently in MVP stage. Depending on the adoption, new features might be added in the future. 
+Scroll to the bottom to see the limitations. Pull requests are welcome.
+
 TOC
 ---
 1. [Prerequisites](#prerequisites)
@@ -11,6 +16,7 @@ TOC
 3. [Configuration](#configuation)
 4. [Usage](#usage)
 5. [Adding alert](#addingalert)
+6. [Limitations](#limitations)
 
 ## Prerequisites
 
@@ -77,4 +83,12 @@ Letter "A" is the "refId" of the "CPU utilization". You can hide the new metric 
 
 Finally, you need to add a tag "alert" to the dashboard like below.
 ![board settings](resources/board_settings.png)
+
+## Limitations
+
++ Supports only Graphite backend as of now
++ Graphite authentication has not been implemented
++ Single threaded
+
+Pull requests are welcome!
 

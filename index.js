@@ -145,57 +145,87 @@ function getDatasource(name) {
 
 function checkPanel(board, panel) {
   return getDatasource(panel.datasource).then(function(datasource) {
-    return Promise.all(_.map(panel.targets, function(line) {
+    var checks = _.reduce(panel.targets, function(checks, line) {
       if (line.target && line.target.trim().startsWith('alias(')) {
         var name = line.target.substring(line.target.lastIndexOf(',')+1, line.target.lastIndexOf(')')).trim();
         name = name.substr(1,name.length-2); // remove the quotes
-
+  
         if (name.endsWith('_bound')) {
           var target_ref = name.substring(0, name.indexOf('_'));
           var condition = name.substring(name.indexOf('_') + 1, name.lastIndexOf('_'));
           var target_threshold = line.target.substring(line.target.indexOf('(') + 1, line.target.lastIndexOf(','));
-          var target_data = _.find(panel.targets, {refId: target_ref}).target;
-
-  	  return Promise.all([
-   	    graphite_call(datasource, target_data),
-            graphite_call(datasource, target_threshold),
-          ]).spread(function(data, threshold) {
-            _.forEach(data, function(dataitem) {
-              var last_item = _.findLast(dataitem.datapoints, function(item) { return item[0] != null; });
-              var last_threshold = _.findLast(threshold[0].datapoints, function(t_item) { return t_item[1] == last_item[1]; });
-              last_threshold = last_threshold || target_threshold.startsWith('constantLine') && threshold[0].datapoints[0];
-              var checktime = Math.round((new Date()).getTime()/1000) - 180;  // TODO: ensure it is UTC
-
-              var evt = {
-                entity: 'grafana.' + board + '.' + panel.title.replace(/ /g,'_'),
-                check: dataitem.target,
-                type: 'service',
-                details: 'check grafana board for detail: ' + CFG.grafana_endpoint + 'dashboard/db/' + board,
-                time: checktime,
-              };
-
-              if (last_item==null || last_threshold==null || last_item[1] < checktime) {
-                evt.state = 'warning';
-                evt.summary = 'the value of ' + dataitem.target + ' is missing for more than 180 seconds';
-                Counter_warning ++;
-              } else if (condition === 'lower' && last_item[0] < last_threshold[0]) {
-                evt.state = 'critical';
-                evt.summary = 'the value of ' + dataitem.target + '(' + last_item[0] + ') is beyond the ' + condition + ' bound (' + last_threshold[0] + ')';
-                Counter_critical ++;
-              } else if (condition === 'upper' && last_item[0] > last_threshold[0]) {
-                evt.state = 'critical';
-                evt.summary = 'the value of ' + dataitem.target + '(' + last_item[0] + ') is beyond the ' + condition + ' bound (' + last_threshold[0] + ')';
-                Counter_critical ++;
-              } else {
-                evt.state = 'ok';
-                evt.summary = 'the value of ' + dataitem.target + 'is within ' + condition + ' bound';
-                Counter_ok ++;
-              }
-              Events.push(evt);
-            });
-          });
+  
+          var check = _.find(checks, {target: target_ref});
+          if (!check) {
+              check = {target: target_ref};
+              checks.push(check);
+          }
+  
+          check[condition] = target_threshold;
         }
       }
+      return checks;
+    }, []);
+
+    return Promise.all(_.map(checks, function(check) {
+      var target_data = _.find(panel.targets, {refId: check.target}).target;
+      return Promise.all([
+        graphite_call(datasource, target_data),
+        check.lower && graphite_call(datasource, check.lower),
+        check.upper && graphite_call(datasource, check.upper),
+      ]).spread(function(data, lower, upper) {
+        var checktime = Math.round((new Date()).getTime()/1000) - 180;  // TODO: ensure it is UTC
+        _.forEach(data, function(series) {
+          var last_item = _.findLast(series.datapoints, function(item) { return item[0] != null; });
+          var lower_value = null;
+          var upper_value = null;
+          if (lower) {
+            var left_threshold = _.findLast(lower[0].datapoints, function(t_item) { return t_item[1] <= last_item[1]; });
+            var right_threshold = _.find(lower[0].datapoints, function(t_item) { return t_item[1] >= last_item[1]; });
+            if (left_threshold && left_threshold[0] != null && right_threshold && right_threshold[0] != null) {
+              lower_value = (left_threshold[0] + right_threshold[0])/2;
+            }
+          }
+          if (upper) {
+            var left_threshold = _.findLast(upper[0].datapoints, function(t_item) { return t_item[1] <= last_item[1]; });
+            var right_threshold = _.find(upper[0].datapoints, function(t_item) { return t_item[1] >= last_item[1]; });
+            if (left_threshold && left_threshold[0] != null && right_threshold && right_threshold[0] != null) {
+              upper_value = (left_threshold[0] + right_threshold[0])/2;
+            }
+          }
+
+          var evt = {
+            entity: 'grafana.' + board + '.' + panel.title.replace(/ /g,'_'),
+            check: series.target,
+            type: 'service',
+            details: 'check grafana board for detail: ' + CFG.grafana_endpoint + 'dashboard/db/' + board,
+            time: checktime,
+          };
+
+          if (
+              last_item == null || last_item[1] < checktime ||
+              ( lower && lower_value == null ) ||
+              ( upper && upper_value == null )
+          ) {
+            evt.state = 'warning';
+            evt.summary = 'the value of ' + series.target + ' is missing for more than 180 seconds';
+            Counter_warning ++;
+          } else if (lower && last_item[0] < lower_value) {
+            evt.state = 'critical';
+            evt.summary = 'the value of ' + series.target + '(' + last_item[0] + ') is beyond the lower bound (' + lower_value + ')';
+            Counter_critical ++;
+          } else if (upper && last_item[0] > upper_value) {
+            evt.state = 'critical';
+            evt.summary = 'the value of ' + series.target + '(' + last_item[0] + ') is beyond the lower bound (' + lower_value + ')';
+            Counter_critical ++;
+          } else {
+            evt.state = 'ok';
+            evt.summary = 'the value of ' + series.target + ' is within range';
+            Counter_ok ++;
+          }
+          Events.push(evt);
+        });
+      });
     }));
   });
 }
